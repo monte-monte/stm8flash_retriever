@@ -98,7 +98,7 @@ programmer_t pgms[] = {
 void print_help_and_exit(const char *name, bool err) {
 	int i = 0;
 	FILE *stream = err ? stderr : stdout;
-	fprintf(stream, "Usage: %s [-c programmer] [-S serialno] [-p partno] [-s memtype] [-b bytes] [-r|-w|-v] <filename>\n", name);
+	fprintf(stream, "Usage: %s [-c programmer] [-S serialno] [-p partno] [-s memtype] [-b bytes] [-a|-r|-w|-v] <filename>\n", name);
 	fprintf(stream, "Usage: %s [-c programmer] [-S serialno] [-p partno] -R\n", name);
 	fprintf(stream, "Options:\n");
 	fprintf(stream, "\t-?             Display this help\n");
@@ -124,6 +124,7 @@ void print_help_and_exit(const char *name, bool err) {
 	fprintf(stream, "\t-l             List supported STM8 devices\n");
 	fprintf(stream, "\t-s memtype     Specify memory type (flash, eeprom, ram, opt or explicit address)\n");
 	fprintf(stream, "\t-b bytes       Specify number of bytes\n");
+	fprintf(stream, "\t-a <filename>  Read ALL data from device to files\n");
 	fprintf(stream, "\t-r <filename>  Read data from device to file\n");
 	fprintf(stream, "\t-w <filename>  Write data from file to device\n");
 	fprintf(stream, "\t-v <filename>  Verify data in device against file\n");
@@ -380,7 +381,8 @@ int main(int argc, char **argv) {
 	setbuf (stderr, 0); // Make stderr unbuffered (which is the default on POSIX anyway, but not on Windows).
 	setbuf (stdout, 0); // Also make stdout unbuffered (performance doesn't matter much here, bug quick progress display is useful).
 
-	while((c = getopt(argc, argv, "r:w:v:nc:S:p:d:s:b:hluVLR")) != (char)-1) {
+	while((c = getopt(argc, argv, "a:r:w:v:nc:S:p:d:s:b:hluVLRo")) != (char)-1) {
+    // printf("%c\n", c);
 		switch(c) {
 			case 'c':
 				pgm_specified = true;
@@ -409,6 +411,14 @@ int main(int argc, char **argv) {
 					printf("%s ", stm8_devices[i].name);
 				printf("\n");
 				exit(0);
+      case 'o':
+        action = ROP;
+        need_file = false;
+        break;
+			case 'a':
+				action = READALL;
+				strcpy(filename, optarg);
+				break;
 			case 'r':
 				action = READ;
 				strcpy(filename, optarg);
@@ -483,6 +493,24 @@ int main(int argc, char **argv) {
 	if(!part)
 		spawn_error("No part has been specified");
 
+  if (action == ROP) {
+    size_t opt_size = (part->flash_size <= 8*1024 ? 0x40 : 0x80);
+    start = 0x4800;
+		start_addr_specified = true;
+    bytes_count = opt_size;
+    fileformat = INTEL_HEX;
+    extern int rop_byte;
+
+    if(!usb_init(pgm, pgm_serialno_specified, pgm_serialno))
+		spawn_error("Couldn't initialize stlink");
+
+    bool open = stlink2_open(pgm);
+
+		fprintf(stderr, "ROP: %02x\n", rop_byte);
+
+    exit(open);
+  }
+
 	// Try define memory type by address
 	if(memtype == UNKNOWN) {
 		if((start >= 0x4800) && (start < 0x4880)) {
@@ -498,6 +526,7 @@ int main(int argc, char **argv) {
 			memtype = EEPROM;
 		}
 	}
+  
 
 	switch (memtype) {
 	case RAM:
@@ -570,7 +599,18 @@ int main(int argc, char **argv) {
 		int bytes_count_align = ((bytes_count-1)/256+1)*256; // Reading should be done in blocks of 256 bytes
 		unsigned char *buf = malloc(bytes_count_align);
 		if(!buf) spawn_error("malloc failed");
-		int recv = pgm->read_range(pgm, part, buf, start, bytes_count_align);
+    int recv = pgm->read_range(pgm, part, buf, part->flash_start, 256);
+		if(recv < 256) {
+			fprintf(stderr, "\r\nRequested 256 bytes but received only %d.\r\n", recv);
+			spawn_error("Failed to read MCU");
+		}
+    if (buf[0] == 0) {
+      fprintf(stderr, "\r\nRead is locked.\r\n");
+      exit(100);
+    } else {
+      fprintf(stderr, "\r\nRead: %u\r\n", buf[0]);
+    }
+		recv = pgm->read_range(pgm, part, buf, start, bytes_count_align);
 		if(recv < bytes_count_align) {
 			fprintf(stderr, "\r\nRequested %d bytes but received only %d.\r\n", bytes_count_align, recv);
 			spawn_error("Failed to read MCU");
@@ -592,6 +632,124 @@ int main(int argc, char **argv) {
 		fclose(f);
 		fprintf(stderr, "OK\n");
 		fprintf(stderr, "Bytes received: %d\n", bytes_count);
+  } else if (action == READALL) {
+    // if(!start_addr_specified) {
+		// 	start = part->flash_start;
+		// 	start_addr_specified = true;
+		// }
+		// if(!bytes_count_specified || bytes_count > part->flash_size) {
+		// 	bytes_count = part->flash_size;
+		// }
+    bytes_count = part->flash_size;
+    start = part->flash_start;
+    char new_filename[264];
+    memset(new_filename, 0, sizeof(new_filename));
+    int bytes_count_align = ((bytes_count-1)/256+1)*256; // Reading should be done in blocks of 256 bytes
+    unsigned char *buf = malloc(bytes_count_align);
+    if(!buf) spawn_error("malloc failed");
+    int recv = pgm->read_range(pgm, part, buf, 0x4800, 128);
+    if(recv < 128) {
+      fprintf(stderr, "\r\nRequested 256 bytes but received only %d.\r\n", recv);
+      spawn_error("Failed to read MCU");
+    }
+    for (int i = 1; i <= 16; i++) {
+      // fprintf(stderr, "%u ", buf[i]);
+      if (buf[0] != buf[i]) {
+        break;
+      }
+      if (i == 16) {
+        fprintf(stderr, "\r\nRead is locked.\r\n");
+        exit(100);
+      }
+    }
+    // if (buf[0] == 0) {
+      
+    // } else {
+      fprintf(stderr, "\r\nRead: %u\r\n", buf[0]);
+    // }
+    // Reading flash
+    fprintf(stderr, "Reading %d bytes at 0x%x... ", bytes_count, start);
+    recv = pgm->read_range(pgm, part, buf, start, bytes_count_align);
+    if(recv < bytes_count_align) {
+      fprintf(stderr, "\r\nRequested %d bytes but received only %d.\r\n", bytes_count_align, recv);
+      spawn_error("Failed to read MCU");
+    }
+    strcpy(new_filename, filename);
+    strcat(new_filename, "_flash");
+    // fprintf(stderr, "\r\nOpening file: %s.\r\n", new_filename);
+    if(!(f = fopen(new_filename, (fileformat == RAW_BINARY) ? "wb" : "w")))
+      spawn_error("Failed to open file");
+    switch(fileformat)
+    {
+    case INTEL_HEX:
+      if(ihex_write(f, buf, start, start+bytes_count) < 0)
+        exit(-1);
+      break;
+    case MOTOROLA_S_RECORD:
+      srec_write(f, buf, start, start+bytes_count);
+      break;
+    default:
+      fwrite(buf, 1, bytes_count, f);
+    }
+    fclose(f);
+    fprintf(stderr, "OK\n");
+    fprintf(stderr, "Bytes received: %d\n", bytes_count);
+    // Reading EEPROM
+    bytes_count = part->eeprom_size;
+    start = part->eeprom_start;
+    fprintf(stderr, "Reading %d bytes at 0x%x... ", bytes_count, start);
+    recv = pgm->read_range(pgm, part, buf, start, bytes_count_align);
+    if(recv < bytes_count_align) {
+      fprintf(stderr, "\r\nRequested %d bytes but received only %d.\r\n", bytes_count_align, recv);
+      spawn_error("Failed to read MCU");
+    }
+    strcpy(new_filename, filename);
+    strcat(new_filename, "_eeprom");
+    if(!(f = fopen(new_filename, (fileformat == RAW_BINARY) ? "wb" : "w")))
+      spawn_error("Failed to open file");
+    switch(fileformat)
+    {
+    case INTEL_HEX:
+      if(ihex_write(f, buf, start, start+bytes_count) < 0)
+        exit(-1);
+      break;
+    case MOTOROLA_S_RECORD:
+      srec_write(f, buf, start, start+bytes_count);
+      break;
+    default:
+      fwrite(buf, 1, bytes_count, f);
+    }
+    fclose(f);
+    fprintf(stderr, "OK\n");
+    fprintf(stderr, "Bytes received: %d\n", bytes_count);
+    // Reading OPTBYTES
+    bytes_count = (part->flash_size <= 8*1024 ? 0x40 : 0x80);
+    start = 0x4800;
+    fprintf(stderr, "Reading %d bytes at 0x%x... ", bytes_count, start);
+    recv = pgm->read_range(pgm, part, buf, start, bytes_count_align);
+    if(recv < bytes_count_align) {
+      fprintf(stderr, "\r\nRequested %d bytes but received only %d.\r\n", bytes_count_align, recv);
+      spawn_error("Failed to read MCU");
+    }
+    strcpy(new_filename, filename);
+    strcat(new_filename, "_opt");
+    if(!(f = fopen(new_filename, (fileformat == RAW_BINARY) ? "wb" : "w")))
+      spawn_error("Failed to open file");
+    switch(fileformat)
+    {
+    case INTEL_HEX:
+      if(ihex_write(f, buf, start, start+bytes_count) < 0)
+        exit(-1);
+      break;
+    case MOTOROLA_S_RECORD:
+      srec_write(f, buf, start, start+bytes_count);
+      break;
+    default:
+      fwrite(buf, 1, bytes_count, f);
+    }
+    fclose(f);
+    fprintf(stderr, "OK\n");
+    fprintf(stderr, "Bytes received: %d\n", bytes_count);
 	} else if (action == VERIFY) {
 		fprintf(stderr, "Verifing %d bytes at 0x%x... ", bytes_count, start);
 

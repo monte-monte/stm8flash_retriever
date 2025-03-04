@@ -20,11 +20,13 @@ typedef enum {
 
 typedef enum {
     NONE = 0,
+    READALL,
     READ,
     WRITE,
     VERIFY,
     RESET,
-    UNLOCK
+    UNLOCK,
+    ROP
 } action_t;
 
 typedef enum {
