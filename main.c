@@ -494,21 +494,21 @@ int main(int argc, char **argv) {
 		spawn_error("No part has been specified");
 
   if (action == ROP) {
-    size_t opt_size = (part->flash_size <= 8*1024 ? 0x40 : 0x80);
-    start = 0x4800;
-		start_addr_specified = true;
-    bytes_count = opt_size;
-    fileformat = INTEL_HEX;
-    extern int rop_byte;
+    // size_t opt_size = (part->flash_size <= 8*1024 ? 0x40 : 0x80);
+    // start = 0x4800;
+		// start_addr_specified = true;
+    // bytes_count = opt_size;
+    // fileformat = INTEL_HEX;
+    // extern int rop_byte;
 
-    if(!usb_init(pgm, pgm_serialno_specified, pgm_serialno))
-		spawn_error("Couldn't initialize stlink");
+    // if(!usb_init(pgm, pgm_serialno_specified, pgm_serialno))
+		// spawn_error("Couldn't initialize stlink");
 
-    bool open = stlink2_open(pgm);
+    // bool open = stlink2_open(pgm);
 
-		fprintf(stderr, "ROP: %02x\n", rop_byte);
+		// fprintf(stderr, "ROP: %02x\n", rop_byte);
 
-    exit(open);
+    // exit(open);
   }
 
 	// Try define memory type by address
